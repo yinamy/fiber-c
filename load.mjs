@@ -1,4 +1,3 @@
-
 // The `Wasi` class is taken from this blogpost with minor changes:
 // https://dev.to/ndesmic/building-a-minimal-wasi-polyfill-for-browsers-4nel
 
@@ -101,8 +100,7 @@ const wasi = new Wasi({
 });
 
 // load the wasm file
-const binary = read('treesum_switch_wasmfx.wasm','binary');
-
+const binary = readbuffer(arguments[0]);
 WebAssembly.instantiate(binary, { "wasi_snapshot_preview1": wasi }).then(({ instance }) => {
   wasi.instance = instance;
   instance.exports._start();
