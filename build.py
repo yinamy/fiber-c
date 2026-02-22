@@ -34,25 +34,35 @@ def build_benchmarks(benchmark: str):
     # do different things if the benchmark uses `switch`
     if uses_switch(benchmark):
         asyncify_impl = "asyncify_switch_impl.c"
+        wasmfx_impl = "wasmfx_switch_impl.c"
+        wasmfx_imports = "imports_switch.wat"
     else:
         asyncify_impl = "asyncify_impl.c"
+        wasmfx_impl = "wasmfx_impl.c"
+        wasmfx_imports = "imports.wat"
 
     # Compile to asyncify .wasm
     os.system(f"{config['WASICC']} -DSTACK_POOL_SIZE={config['STACK_POOL_SIZE']} -DASYNCIFY_DEFAULT_STACK_SIZE={config['ASYNCIFY_DEFAULT_STACK_SIZE']} src/asyncify/{asyncify_impl} {config['WASIFLAGS']} examples/{benchmark}.c -o {benchmark}_asyncify.pre.wasm")
     os.system(f"{config['ASYNCIFY']} {benchmark}_asyncify.pre.wasm -o {benchmark}_asyncify.wasm")
     os.system(f"chmod +x {benchmark}_asyncify.wasm")
 
+    # Compile wasmfx imports
+    os.system(f"{config['WASICC']} -xc {config['SHADOW_STACK_FLAG']} -DWASMFX_CONT_TABLE_INITIAL_CAPACITY={config['WASMFX_CONT_TABLE_INITIAL_CAPACITY']} -E src/wasmfx/{wasmfx_imports}.pp | sed 's/^#.*//g' > src/wasmfx/{wasmfx_imports}")
+    os.system(f"{config['WASM_INTERP']} -d -i src/wasmfx/{wasmfx_imports} -o fiber_wasmfx_imports.wasm")
+
     # Compile to wasmfx .wasm
     # TODO: figure out how wasm-merge can be factored out
+    os.system(f"{config['WASICC']} {config['SHADOW_STACK_FLAG']} -DWASMFX_CONT_SHADOW_STACK_SIZE={config['WASMFX_CONT_SHADOW_STACK_SIZE']} -DWASMFX_CONT_TABLE_INITIAL_CAPACITY={config['WASMFX_CONT_TABLE_INITIAL_CAPACITY']} -Wl,--export-table,--export-memory,--export=__stack_pointer src/wasmfx/{wasmfx_impl} {config['WASIFLAGS']} examples/{benchmark}.c -o {benchmark}_wasmfx.pre.wasm")
+    os.system(f"{config['WASM_MERGE']} fiber_wasmfx_imports.wasm \"fiber_wasmfx_imports\" {benchmark}_wasmfx.pre.wasm \"main\" -o {benchmark}_wasmfx.wasm")
+
 
 def clean_artefacts(benchmark: str):
     os.system(f"rm {benchmark}_asyncify.pre.wasm")
-    # TODO: clean wasmfx artefacts when we have them
-
 
 def clean_all(benchmark: str):
     os.system(f"rm {benchmark}_*.sh")
     os.system(f"rm {benchmark}_asyncify.wasm")
+    os.system(f"rm {benchmark}_wasmfx.wasm")
     # TODO: clean wasmfx .wasm when we have them
     
 # ---- Script generation ----
@@ -60,17 +70,17 @@ def clean_all(benchmark: str):
 ENGINES = {
 
     "wasmtime": {
-        "asyncify": """{prefix} {wasmtime} run -W=exceptions,function-references,gc,stack-switching {benchmark}_asyncify.wasm""",
-        "wasmfx": """{prefix} {wasmtime} run -W=exceptions,function-references,gc,stack-switching {benchmark}_wasmfx.wasm""",
+        "asyncify": """{prefix} {wasmtime} run -W=exceptions,function-references,gc,stack-switching {benchmark}_asyncify.wasm {arg}""",
+        "wasmfx": """{prefix} {wasmtime} run -W=exceptions,function-references,gc,stack-switching {benchmark}_wasmfx.wasm {arg}""",
     },
 
     "d8": {
-        "asyncify": """{prefix} {d8} --experimental-wasm-wasmfx {v8_js_loader} -- {benchmark}_asyncify.wasm""",
+        "asyncify": """{prefix} {d8} --experimental-wasm-wasmfx {v8_js_loader} -- {benchmark}_asyncify.wasm {arg}""",
     },
     
     "wizard": {
-        "asyncify": """{prefix} {wizard} --ext:stack-switching {benchmark}_asyncify.wasm""",
-        "wasmfx": """{prefix} {wizard} --ext:stack-switching {benchmark}_wasmfx.wasm""",
+        "asyncify": """{prefix} {wizard} --ext:stack-switching {benchmark}_asyncify.wasm {arg}""",
+        "wasmfx": """{prefix} {wizard} --ext:stack-switching {benchmark}_wasmfx.wasm {arg}""",
     },
 }
 
@@ -85,6 +95,11 @@ def main():
 
     mode = sys.argv[1]
     benchmark = sys.argv[2]
+
+    if benchmark in {"itersum", "itersum_switch", "treesum", "treesum_switch", "sieve", "sieve_switch"}:
+        arg = sys.argv[3]
+    else:
+        arg = ""
     
     if mode == "compile":
         benchmark=benchmark
@@ -107,6 +122,7 @@ def main():
                     d8=config["D8_PATH"],
                     wizard=config["WIZARD_PATH"],
                     v8_js_loader=config["V8_JS_LOADER"],
+                    arg=arg
                 )
                 generate_script(Path(script_name), content)
         print("Generated scripts for benchmark:", benchmark)
